@@ -124,6 +124,26 @@ class SentencePieceTokenizer(object):
     # Speedup tokenization.
     cached = {}
 
+    @property
+    def bos_id(self):
+        return self.vocab["<s>"]
+
+    @property
+    def eos_id(self):
+        return self.vocab["</s>"]
+
+    @property
+    def pad_id(self):
+        return self.vocab["[PAD]"]
+
+    @property
+    def unk_id(self):
+        return self.vocab["<unk>"]
+
+    @property
+    def mask_id(self):
+        return self.vocab["[MASK]"]
+
     def preprocess(self, text):
         text = preprocess_text(text, lower=self.do_lower_case)
         return text

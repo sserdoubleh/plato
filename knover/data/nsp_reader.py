@@ -37,7 +37,9 @@ class NSPReader(DialogReader):
     def __init__(self, args):
         super(NSPReader, self).__init__(args)
         self.fields.append("label")
-        self.Record = namedtuple("Record", self.fields, defaults=(None,) * len(self.fields))
+        self.record_cls_name = f"{self.__class__.__name__}_Record"
+        globals()[self.record_cls_name] = namedtuple(
+            self.record_cls_name, self.fields, defaults=(None,) * len(self.fields))
 
         self.mix_negative_sample = args.mix_negative_sample
         self.neg_pool_size = args.neg_pool_size
@@ -52,6 +54,7 @@ class NSPReader(DialogReader):
 
     def _mix_negative_sample(self, reader, neg_pool_size=2 ** 16):
         """Mix random negative samples into dataset."""
+        Record = globals()[self.record_cls_name]
         def _gen_from_pool(pool):
             """Generate negative samples from pool."""
             num_samples = len(pool)
@@ -74,7 +77,7 @@ class NSPReader(DialogReader):
                     field_values["pos_ids"] = pool[i].pos_ids[:idx_i] + pool[j].pos_ids[idx_j:]
                 if self.use_role:
                     field_values["role_ids"] = pool[i].role_ids[:idx_i] + pool[j].role_ids[idx_j:]
-                neg_record = self.Record(
+                neg_record = Record(
                     **field_values,
                     tgt_start_idx=idx_i,
                     data_id=-1,

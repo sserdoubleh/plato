@@ -75,3 +75,18 @@ def open_file(filename):
         fp = open(filename)
     yield fp
     fp.close()
+
+
+class SubprocessFunction(object):
+    """Fast function."""
+
+    def __init__(self, func):
+        self.func = func
+
+    def initializer(self):
+        SubprocessFunction.func = self.func
+
+
+def subprocess_func_call(inputs):
+    """Callable."""
+    return SubprocessFunction.func(inputs)

@@ -14,6 +14,9 @@
 """Dialogue Reader."""
 
 from collections import namedtuple
+from functools import partial
+import json
+import multiprocessing
 import os
 
 import numpy as np 
@@ -21,6 +24,7 @@ import paddle.fluid as fluid
 from paddle.fluid.incubate.fleet.collective import fleet
 
 from knover.utils import mask, open_file, pad_batch_data, str2bool
+from knover.utils import SubprocessFunction, subprocess_func_call
 import knover.utils.tokenization as tokenization
 
 
@@ -31,6 +35,8 @@ class DialogReader(object):
     def add_cmdline_args(cls, parser):
         """Add cmdline arguments."""
         group = parser.add_argument_group("Reader")
+        group.add_argument("--num_workers", type=int, default=1,
+                           help="The number of process to load data.")
         group.add_argument("--max_src_len", type=int, default=128,
                            help="The maximum length of source sequence (context in dialogue generation task).")
         group.add_argument("--max_tgt_len", type=int, default=128,
@@ -81,14 +87,15 @@ class DialogReader(object):
         return group
 
     def __init__(self, args):
+        self.num_workers = args.num_workers
+
         tokenizer_cls = getattr(tokenization, args.tokenizer)
         self.tokenizer = tokenizer_cls(args)
-        self.vocab = self.tokenizer.vocab
-        self.pad_id = args.pad_id = self.vocab["[PAD]"]
-        self.bos_id = args.bos_id = self.vocab["[CLS]"]
-        self.eos_id = args.eos_id = self.vocab["[SEP]"]
-        self.unk_id = args.unk_id = self.vocab["[UNK]"]
-        self.mask_id = args.mask_id = self.vocab["[MASK]"]
+        self.pad_id = args.pad_id = self.tokenizer.pad_id
+        self.bos_id = args.bos_id = self.tokenizer.bos_id
+        self.eos_id = args.eos_id = self.tokenizer.eos_id
+        self.unk_id = args.unk_id = self.tokenizer.unk_id
+        self.mask_id = args.mask_id = self.tokenizer.mask_id
         self.vocab_size = args.get("vocab_size", 0)
         self.max_src_len = args.max_src_len
         self.max_tgt_len = args.max_tgt_len
@@ -129,13 +136,17 @@ class DialogReader(object):
             self.fields.append("role_ids")
         self.num_numerical_fields = len(self.fields)
         self.fields += ["tgt_start_idx", "data_id"]
-        self.sort_key = lambda record: [len(record.token_ids)]
 
-        self.Record = namedtuple("Record", self.fields, defaults=(None,) * len(self.fields))
+        self.record_cls_name = f"{self.__class__.__name__}_Record"
+        globals()[self.record_cls_name] = namedtuple(
+            self.record_cls_name, self.fields, defaults=(None,) * len(self.fields))
 
         if self.reserve_example:
             self.features = {}
         return
+
+    def sort_key(self, record):
+        return [len(record.token_ids)]
 
     def get_train_progress(self):
         """Gets progress for training phase."""
@@ -294,7 +305,7 @@ class DialogReader(object):
                 for i in range(ctx_len)
             ]
 
-        if not is_infer:
+        if not is_infer and hasattr(example, "tgt"):
             tgt_field_values = self._parse_tgt(example.tgt)
             field_values = {
                 k: field_values[k] + tgt_field_values[k]
@@ -307,22 +318,41 @@ class DialogReader(object):
         field_values["tgt_start_idx"] = tgt_start_idx
         field_values["data_id"] = example.data_id
 
-        record = self.Record(**field_values)
+        record = globals()[self.record_cls_name](**field_values)
+        if len(record.token_ids) == 2:
+            return None
         return record
 
     def _read_tsv(self, fp, phase, is_infer, delimiter="\t", quotechar=None):
         """Read a tab separated value file and yield records."""
         headers = next(fp).rstrip("\n").split(delimiter)
         headers.append("data_id")
-        Example = namedtuple("Example", headers)
+        self.example_cls_name = f"{self.__class__.__name__}_Example"
+        globals()[self.example_cls_name] = Example = namedtuple(
+            self.example_cls_name, headers)
 
-        for i, line in enumerate(fp):
-            line = line.rstrip("\n").split(delimiter)
-            example = Example(*line, data_id=i)
-            if self.reserve_example and (is_infer or phase.endswith("test")):
-                self.features[i] = example
-            record = self._convert_example_to_record(example, is_infer)
-            yield record
+        def __wrapper__():
+            for i, line in enumerate(fp):
+                line = line.rstrip("\n").split(delimiter)
+                example = Example(*line, data_id=i)
+                if self.reserve_example and (is_infer or phase.endswith("test")):
+                    self.features[i] = example
+                yield example
+        return __wrapper__
+
+    def _read_jsonl(self, fp, phase, is_infer):
+        self.example_cls_name = f"{self.__class__.__name__}_Example"
+        globals()[self.example_cls_name] = Example = namedtuple(
+            self.example_cls_name, ["src", "data_id"])
+
+        def __wrapper__():
+            for i, line in enumerate(fp, 1):
+                obj = json.loads(line)
+                example = Example(src=obj["text"], data_id=i)
+                if self.reserve_example and (is_infer or phase.endswith("test")):
+                    self.features[i] = example
+                yield example
+        return __wrapper__
 
     def _read_numerical_file(self, fp, phase, is_infer, delimiter=";"):
         """Read a file which contains numerical data and yield records."""
@@ -340,7 +370,7 @@ class DialogReader(object):
                 def rindex(lst, elem):
                     return len(lst) - lst[-1:0:-1].index(elem) - 1
                 tgt_start_idx = rindex(cols[0], self.bos_id)
-            record = self.Record(*cols, tgt_start_idx=tgt_start_idx, data_id=i)
+            record = globals()[self.record_cls_name](*cols, tgt_start_idx=tgt_start_idx, data_id=i)
             yield record
 
     def _read_file(self, input_file, phase, is_infer):
@@ -348,11 +378,20 @@ class DialogReader(object):
         def __wrapper__():
             with open_file(input_file) as fp:
                 if self.data_format == "numerical":
-                    records = self._read_numerical_file(fp, phase, is_infer)
+                    yield from self._read_numerical_file(fp, phase, is_infer)
                 else:
-                    records = self._read_tsv(fp, phase, is_infer)
-                for record in records:
-                    yield record
+                    if input_file.endswith(".jsonl"):
+                        gen_examples = self._read_jsonl(fp, phase, is_infer)
+                    else:
+                        gen_examples = self._read_tsv(fp, phase, is_infer)
+
+                    # convert examples to records by multiprocessing
+                    convert_func = partial(self._convert_example_to_record, is_infer=is_infer)
+                    subprocess_func = SubprocessFunction(convert_func)
+                    with multiprocessing.Pool(self.num_workers, initializer=subprocess_func.initializer) as pool:
+                        for i, record in enumerate(pool.imap(subprocess_func_call, gen_examples()), 1):
+                            if record is not None:
+                                yield record
 
         return __wrapper__
 
