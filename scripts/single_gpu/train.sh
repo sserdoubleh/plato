@@ -14,20 +14,22 @@ export FLAGS_fuse_parameter_memory_size=64
 
 mkdir -p ${save_path}
 
+if [[ ${spm_model_file:-""} != "" ]]; then
+    train_args="--spm_model_file ${spm_model_file} ${train_args:-}"
+fi
+
 python \
     ./knover/scripts/train.py \
     --model ${model:-"Plato"} \
     --task ${task:-"DialogGeneration"} \
     --vocab_path ${vocab_path} \
-    --do_lower_case ${do_lower_case:-"false"} \
-    --spm_model_file ${spm_model_file} \
+    --config_path ${config_path} \
     --init_pretraining_params ${init_params:-""} \
     --init_checkpoint ${init_checkpoint:-""} \
     --train_file ${train_file} \
     --valid_file ${valid_file} \
     --data_format ${data_format:-"raw"} \
     --file_format ${file_format:-"file"} \
-    --config_path ${config_path} \
     ${train_args:-} \
     --in_tokens ${in_tokens:-"false"} \
     --batch_size ${batch_size:-8192} \

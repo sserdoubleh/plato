@@ -281,6 +281,8 @@ class DialogReader(object):
     def _convert_example_to_record(self, example, is_infer):
         """Convert an example to a record which can be used as the model's input."""
         field_values = self._parse_src(example.src)
+        if len(field_values["token_ids"]) == 1:
+            return None
 
         if self.max_knowledge_len > 0:
             # add knowledge
@@ -319,8 +321,6 @@ class DialogReader(object):
         field_values["data_id"] = example.data_id
 
         record = globals()[self.record_cls_name](**field_values)
-        if len(record.token_ids) == 2:
-            return None
         return record
 
     def _read_tsv(self, fp, phase, is_infer, delimiter="\t", quotechar=None):
@@ -368,7 +368,10 @@ class DialogReader(object):
                 # if you change the numerical data format, you must to make sure the last part of
                 # numerical sequence is the target sequence
                 def rindex(lst, elem):
-                    return len(lst) - lst[-1:0:-1].index(elem) - 1
+                    try:
+                        return len(lst) - lst[-1:0:-1].index(elem) - 1
+                    except:
+                        return 0
                 tgt_start_idx = rindex(cols[0], self.bos_id)
             record = globals()[self.record_cls_name](*cols, tgt_start_idx=tgt_start_idx, data_id=i)
             yield record
@@ -639,10 +642,10 @@ class DialogReader(object):
         if self.use_role:
             batch_role_ids = [record.role_ids for record in batch_records]
         batch["token_ids"] = pad_batch_data(batch_token_ids, pad_id=self.pad_id)
-        batch["type_ids"] = pad_batch_data(batch_type_ids, pad_id=self.pad_id)
-        batch["pos_ids"] = pad_batch_data(batch_pos_ids, pad_id=self.pad_id)
+        batch["type_ids"] = pad_batch_data(batch_type_ids, pad_id=0)
+        batch["pos_ids"] = pad_batch_data(batch_pos_ids, pad_id=0)
         if self.use_role:
-            batch["role_ids"] = pad_batch_data(batch_role_ids, pad_id=self.pad_id)
+            batch["role_ids"] = pad_batch_data(batch_role_ids, pad_id=0)
 
         batch_tgt_start_idx = [record.tgt_start_idx for record in batch_records]
         batch["generation_mask"] = self._gen_self_attn_mask(

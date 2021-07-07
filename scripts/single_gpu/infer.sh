@@ -14,6 +14,12 @@ export FLAGS_fuse_parameter_memory_size=64
 
 mkdir -p ${save_path}
 
+if [[ ${spm_model_file:-""} != "" ]]; then
+    save_args="--spm_model_file ${spm_model_file} ${save_args:-}"
+    infer_args="--spm_model_file ${spm_model_file} ${infer_args:-}"
+fi
+
+# Process NSP model(for reranking in dialogue generation task).
 if [[ ${nsp_init_params:-""} != "" ]]; then
     if [[ ! -e "${nsp_init_params}/__model__" ]]; then
         python -m \
@@ -22,7 +28,6 @@ if [[ ${nsp_init_params:-""} != "" ]]; then
             --task NextSentencePrediction \
             --vocab_path ${vocab_path} \
             --init_pretraining_params ${nsp_init_params} \
-            --spm_model_file ${spm_model_file} \
             --inference_model_path ${nsp_init_params} \
             --config_path ${config_path}
     fi
@@ -34,7 +39,6 @@ python -m \
     --model ${model:-"Plato"} \
     --task ${task:-"DialogGeneration"} \
     --vocab_path ${vocab_path} \
-    --spm_model_file ${spm_model_file} \
     --init_pretraining_params ${init_params:-""} \
     --infer_file ${infer_file} \
     --data_format ${data_format:-"raw"} \

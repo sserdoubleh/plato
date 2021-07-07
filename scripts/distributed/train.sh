@@ -19,6 +19,11 @@ if [[ ${log_dir:-""} != "" ]]; then
     distributed_args="${distributed_args:-} --log_dir ${log_dir}"
 fi
 
+
+if [[ ${spm_model_file:-""} != "" ]]; then
+    train_args="--spm_model_file ${spm_model_file} ${train_args:-}"
+fi
+
 fleetrun \
     ${distributed_args:-} \
     ./knover/scripts/train.py \
@@ -26,15 +31,13 @@ fleetrun \
     --model ${model:-"Plato"} \
     --task ${task:-"DialogGeneration"} \
     --vocab_path ${vocab_path} \
-    --do_lower_case ${do_lower_case:-"false"} \
-    --spm_model_file ${spm_model_file} \
+    --config_path ${config_path} \
     --init_pretraining_params ${init_params:-""} \
     --init_checkpoint ${init_checkpoint:-""} \
     --train_file ${train_file} \
     --valid_file ${valid_file} \
     --data_format ${data_format:-"raw"} \
     --file_format ${file_format:-"file"} \
-    --config_path ${config_path} \
     ${train_args:-} \
     --in_tokens ${in_tokens:-"false"} \
     --batch_size ${batch_size:-8192} \
